@@ -7,7 +7,9 @@ Unlock the power of AWS Bedrock services in your Laravel applications with Prism
 ## Installation
 
 ```bash
-composer require prism-php/bedrock
+composer config repositories.iseekplant composer https://packages.iseekplant.com.au  
+
+composer require iseekplant/prism-bedrock
 ```
 
 ## Configuration
@@ -33,7 +35,7 @@ Add the following to your Prism configuration (`config/prism.php`):
 ### Text Generation
 
 ```php
-use Prism\Prism\Prism;
+use Prism\Prism\Facades\Prism;
 use Prism\Bedrock\Bedrock;
 
 $response = Prism::text()
@@ -44,10 +46,29 @@ $response = Prism::text()
 echo $response->text;
 ```
 
+### Text Stream
+
+```php
+use Prism\Prism\Facades\Prism;
+use Prism\Bedrock\Bedrock;
+
+$response = Prism::text()
+    ->using(Bedrock::KEY, 'anthropic.claude-3-sonnet-20240229-v1:0')
+    ->withPrompt('Explain quantum computing in simple terms')
+    ->asStream();
+
+foreach ($response as $event) {
+    if ($event instanceof TextDeltaEvent) {
+        echo $event->delta;
+    }
+}
+
+```
+
 ### Structured Output (JSON)
 
 ```php
-use Prism\Prism\Prism;
+use Prism\Prism\Facades\Prism;
 use Prism\Bedrock\Bedrock;
 use Prism\Prism\Schema\ObjectSchema;
 use Prism\Prism\Schema\StringSchema;
@@ -85,7 +106,7 @@ $data = $response->structured;
 ### Embeddings (with Cohere models)
 
 ```php
-use Prism\Prism\Prism;
+use Prism\Prism\Facades\Prism;
 use Prism\Bedrock\Bedrock;
 
 $response = Prism::embeddings()
@@ -103,7 +124,7 @@ $embeddings = $response->embeddings;
 > When using inference profiles via an ARN, you should urlencode the model name.
 
 ```php
-use Prism\Prism\Prism;
+use Prism\Prism\Facades\Prism;
 use Prism\Bedrock\Bedrock;
 
 $response = Prism::text()
@@ -143,7 +164,7 @@ Therefore if you use a model that is not supported by AWS Bedrock Converse, and 
 If you wish to force Prism Bedrock to use Converse instead of a vendor specific interface, you can do so with `withProviderOptions()`:
 
 ```php
-use Prism\Prism\Prism;
+use Prism\Prism\Facades\Prism;
 use Prism\Bedrock\Bedrock;
 use Prism\Bedrock\Enums\BedrockSchema;
 
@@ -160,7 +181,7 @@ $response = Prism::text()
 For [supported models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html), you can enable prompt caching to reduce latency and costs:
 
 ```php
-use Prism\Prism\Prism;
+use Prism\Prism\Facades\Prism;
 use Prism\Bedrock\Bedrock;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 
@@ -186,7 +207,7 @@ Prism Bedrock has adapted support by appending a prompt asking the model to a re
 The performance of that prompt may vary by model. You can override it using `withProviderOptions()`:
 
 ```php
-use Prism\Prism\Prism;
+use Prism\Prism\Facades\Prism;
 use Prism\Bedrock\Bedrock;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 
