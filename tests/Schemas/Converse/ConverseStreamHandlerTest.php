@@ -168,7 +168,7 @@ it('can handle tool calls', function (): void {
     Http::assertSent(function (Request $request): bool {
         $body = json_decode($request->body(), true);
 
-        return str_ends_with($request->url(), 'us.amazon.nova-micro-v1:0/converse-stream')
+        return str_ends_with($request->url(), urlencode('us.amazon.nova-micro-v1:0') . '/converse-stream')
             && isset($body['toolConfig']);
     });
 });

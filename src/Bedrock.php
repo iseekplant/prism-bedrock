@@ -141,7 +141,7 @@ class Bedrock extends Provider
             ->contentType('application/json')
             ->withOptions($options)
             ->retry(...$retry)
-            ->baseUrl("https://bedrock-runtime.{$this->region}.amazonaws.com/model/$model/")
+            ->baseUrl("https://bedrock-runtime.{$this->region}.amazonaws.com/model/".urlencode($model)."/")
             ->beforeSending(function (Request $request) {
                 $request = $request->toPsrRequest();
 
