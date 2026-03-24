@@ -1,18 +1,6 @@
-![](assets/bedrock-banner.webp)
+# Prism Bedorck
 
-<p align="center">
-    <a href="https://packagist.org/packages/prism-php/bedrock">
-        <img src="https://poser.pugx.org/prism-php/bedrock/d/total.svg" alt="Total Downloads">
-    </a>
-    <a href="https://packagist.org/packages/prism-php/bedrock">
-        <img src="https://poser.pugx.org/prism-php/bedrock/v/stable.svg" alt="Latest Stable Version">
-    </a>
-    <a href="https://packagist.org/packages/prism-php/bedrock">
-        <img src="https://poser.pugx.org/prism-php/bedrock/license.svg" alt="License">
-    </a>
-</p>
-
-# Prism Bedrock
+> This is a fork of prism bedrock maintained by iseekplant
 
 Unlock the power of AWS Bedrock services in your Laravel applications with Prism Bedrock. This package provides a standalone Bedrock provider for the Prism PHP framework.
 
