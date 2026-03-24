@@ -299,8 +299,10 @@ it('does not remove zero values from payload', function (): void {
         ->asText();
 
     Http::assertSent(function (Request $request): bool {
-        expect($request->data()['inferenceConfig'])->toMatchArray([
-            'temperature' => 0,
+        expect($request->data())->toMatchArray([
+            'inferenceConfig' => [
+                'temperature' => 0,
+            ],
         ]);
 
         return true;

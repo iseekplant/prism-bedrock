@@ -1,4 +1,5 @@
 providers:
+  - Prism\Prism\PrismServiceProvider
   - Prism\Bedrock\BedrockServiceProvider
 
 migrations:
