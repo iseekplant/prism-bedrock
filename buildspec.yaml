@@ -1,0 +1,27 @@
+version: 0.2
+
+env:
+  variables:
+    XDEBUG_MODE: coverage
+  secrets-manager:
+    GITHUB_TOKEN: "Production:GITHUB_TOKEN"
+  git-credential-helper: yes
+
+phases:
+  install:
+    runtime-versions:
+      php: 8.2
+    commands:
+      - CI_COMMIT_MESSAGE=$(git log -1 --pretty=%B)
+      - composer config --global github-oauth.github.com $GITHUB_TOKEN
+      - composer install --no-interaction --prefer-dist --optimize-autoloader
+  build:
+    on-failure: ABORT
+    commands:
+      - vendor/bin/pest
+  post_build:
+    commands:
+      - git fetch --tags
+      - php release.php
+      - git push --tags
+      - aws codepipeline start-pipeline-execution --name satis
