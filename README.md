@@ -96,6 +96,10 @@ $schema = new ObjectSchema(
 $response = Prism::structured()
     ->using(Bedrock::KEY, 'anthropic.claude-3-sonnet-20240229-v1:0')
     ->withSchema($schema)
+    // Add validated_json to use validated json output
+    ->withProvideroptions([
+        'validated_json' => true
+    ])
     ->withPrompt('List the top 3 programming languages')
     ->asStructured();
 
@@ -200,7 +204,7 @@ $response = Prism::text()
 
 ## Structured Adapted Support
 
-Both Anthropic and Converse Schemas do not support a native structured format. 
+Anthropic does not support a native structured format. 
 
 Prism Bedrock has adapted support by appending a prompt asking the model to a response conforming to the schema you provide.
 
