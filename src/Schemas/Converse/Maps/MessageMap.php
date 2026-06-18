@@ -48,7 +48,11 @@ class MessageMap
             $cacheType = data_get($prompt->providerOptions(), 'cacheType');
 
             if ($cacheType) {
-                $output[] = ['cachePoint' => ['type' => $cacheType]];
+                $cachePoint = array_filter([
+                    'type' => $cacheType,
+                    'ttl' => data_get($prompt->providerOptions(), 'cacheTtl'),
+                ]);
+                $output[] = ['cachePoint' => $cachePoint];
             }
         }
 
@@ -111,7 +115,7 @@ class MessageMap
                 ['text' => $message->text()],
                 ...self::mapImageParts($message->images()),
                 ...self::mapDocumentParts($message->documents(), $message->providerOptions()),
-                $cacheType ? ['cachePoint' => ['type' => $cacheType]] : null,
+                $cacheType ? ['cachePoint' => array_filter(['type' => $cacheType, 'ttl' => data_get($message->providerOptions(), 'cacheTtl')])] : null,
             ]),
         ];
     }
@@ -129,7 +133,7 @@ class MessageMap
                 $message->content === '' || $message->content === '0' ? null : ['text' => $message->content],
                 ...self::mapToolCalls($message->toolCalls),
                 ...self::mapCitations($message->additionalContent['citations'] ?? []),
-                $cacheType ? ['cachePoint' => ['type' => $cacheType]] : null,
+                $cacheType ? ['cachePoint' => array_filter(['type' => $cacheType, 'ttl' => data_get($message->providerOptions(), 'cacheTtl')])] : null,
             ])),
         ];
     }

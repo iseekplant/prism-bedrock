@@ -261,3 +261,53 @@ it('maps system messages with a cache breakpoint correctly', function (): void {
         ],
     ]);
 });
+
+it('maps system messages with a cache breakpoint and 1h ttl correctly', function (): void {
+    expect(MessageMap::mapSystemMessages([
+        (new SystemMessage('The answer to life is 42.'))->withProviderOptions(['cacheType' => 'default', 'cacheTtl' => '1h']),
+    ]))->toBe([
+        [
+            'text' => 'The answer to life is 42.',
+        ],
+        [
+            'cachePoint' => [
+                'type' => 'default',
+                'ttl' => '1h',
+            ],
+        ],
+    ]);
+});
+
+it('maps user messages with a cache breakpoint and 1h ttl correctly', function (): void {
+    expect(MessageMap::map([
+        (new UserMessage('Who are you?'))->withProviderOptions(['cacheType' => 'default', 'cacheTtl' => '1h']),
+    ]))->toBe([[
+        'role' => 'user',
+        'content' => [
+            ['text' => 'Who are you?'],
+            [
+                'cachePoint' => [
+                    'type' => 'default',
+                    'ttl' => '1h',
+                ],
+            ],
+        ],
+    ]]);
+});
+
+it('maps assistant messages with a cache breakpoint and 1h ttl correctly', function (): void {
+    expect(MessageMap::map([
+        (new AssistantMessage('I am Thanos'))->withProviderOptions(['cacheType' => 'default', 'cacheTtl' => '1h']),
+    ]))->toBe([[
+        'role' => 'assistant',
+        'content' => [
+            ['text' => 'I am Thanos'],
+            [
+                'cachePoint' => [
+                    'type' => 'default',
+                    'ttl' => '1h',
+                ],
+            ],
+        ],
+    ]]);
+});
