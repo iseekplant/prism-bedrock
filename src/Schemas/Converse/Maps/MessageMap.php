@@ -112,9 +112,9 @@ class MessageMap
         return [
             'role' => 'user',
             'content' => array_filter([
-                ['text' => $message->text()],
                 ...self::mapImageParts($message->images()),
                 ...self::mapDocumentParts($message->documents(), $message->providerOptions()),
+                ['text' => $message->text()],
                 $cacheType ? ['cachePoint' => array_filter(['type' => $cacheType, 'ttl' => data_get($message->providerOptions(), 'cacheTtl')])] : null,
             ]),
         ];

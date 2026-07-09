@@ -63,7 +63,6 @@ it('maps an md document correctly', function (): void {
     ]))->toBe([[
         'role' => 'user',
         'content' => [
-            ['text' => 'Who are you?'],
             [
                 'document' => [
                     'format' => 'txt',
@@ -71,6 +70,7 @@ it('maps an md document correctly', function (): void {
                     'source' => ['bytes' => base64_encode(file_get_contents('tests/Fixtures/document.md'))],
                 ],
             ],
+            ['text' => 'Who are you?'],
         ],
     ]]);
 });
@@ -90,7 +90,6 @@ it('maps a document with citations enabled correctly', function (): void {
     ]))->toBe([[
         'role' => 'user',
         'content' => [
-            ['text' => 'Who are you?'],
             [
                 'document' => [
                     'format' => 'txt',
@@ -101,6 +100,7 @@ it('maps a document with citations enabled correctly', function (): void {
                     ],
                 ],
             ],
+            ['text' => 'Who are you?'],
         ],
     ]]);
 });
@@ -116,13 +116,13 @@ it('maps an image correctly', function (): void {
     ]))->toBe([[
         'role' => 'user',
         'content' => [
-            ['text' => 'Who are you?'],
             [
                 'image' => [
                     'format' => 'png',
                     'source' => ['bytes' => base64_encode(file_get_contents('tests/Fixtures/test-image.png'))],
-                ],
+                    ],
             ],
+            ['text' => 'Who are you?'],
         ],
     ]]);
 });
