@@ -32,6 +32,7 @@ use Prism\Prism\ValueObjects\MessagePartWithCitations;
 use Prism\Prism\ValueObjects\Messages\AssistantMessage;
 use Prism\Prism\ValueObjects\Messages\ToolResultMessage;
 use Prism\Prism\ValueObjects\ToolCall;
+use Prism\Prism\ValueObjects\ToolError;
 use Prism\Prism\ValueObjects\ToolResult;
 use Prism\Prism\ValueObjects\Usage;
 use Throwable;
@@ -130,6 +131,15 @@ class ConverseStreamHandler
                     $toolCall->arguments()
                 );
 
+                $success = true;
+                $error = null;
+
+                if ($result instanceof ToolError) {
+                    $result = $result->message;
+                    $success = false;
+                    $error = $result;
+                }
+
                 $toolResult = new ToolResult(
                     toolCallId: $toolCall->id,
                     toolName: $toolCall->name,
@@ -144,7 +154,8 @@ class ConverseStreamHandler
                     timestamp: time(),
                     toolResult: $toolResult,
                     messageId: $this->state->messageId(),
-                    success: true
+                    success: $success,
+                    error: $error,
                 );
             } catch (Throwable $e) {
                 $errorResultObj = new ToolResult(
