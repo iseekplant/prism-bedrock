@@ -45,7 +45,25 @@ it('can generate text with reasoning content', function (): void {
         ->toBe(21)
         ->and($response->usage->completionTokens)->toBe(765)
         ->and($response->text)->toContain('In the mist‑shrouded kingdom of Eldoria')
-        ->and($response->text)->toContain('Sir Alden\'s legend endured');
+        ->and($response->text)->toContain('Sir Alden\'s legend endured')
+        ->and($response->additionalContent['thinking'])->toContain('Tell me a short story')
+        ->and($response->additionalContent)->not->toHaveKey('thinking_signature');
+});
+
+it('extracts the thinking signature when present', function (): void {
+    FixtureResponse::fakeResponseSequence('converse', 'converse/generate-text-with-reasoning-and-signature');
+
+    $response = Prism::text()
+        ->using('bedrock', 'us.anthropic.claude-sonnet-4-20250514-v1:0')
+        ->withProviderOptions([
+            'apiSchema' => BedrockSchema::Converse,
+            'additionalModelRequestFields' => ['thinking' => ['type' => 'enabled', 'budget_tokens' => 1024]],
+        ])
+        ->withPrompt('Who are you?')
+        ->asText();
+
+    expect($response->additionalContent['thinking'])->toBe('Let me think about this.')
+        ->and($response->additionalContent['thinking_signature'])->toStartWith('EqUCCkgICBAB');
 });
 
 it('can generate text with a system prompt', function (): void {

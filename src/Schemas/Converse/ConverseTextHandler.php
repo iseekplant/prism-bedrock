@@ -6,6 +6,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Collection;
 use Prism\Bedrock\Contracts\BedrockTextHandler;
 use Prism\Bedrock\Schemas\Converse\Concerns\ExtractsText;
+use Prism\Bedrock\Schemas\Converse\Concerns\ExtractsThinking;
 use Prism\Bedrock\Schemas\Converse\Concerns\ExtractsToolCalls;
 use Prism\Bedrock\Schemas\Converse\Maps\FinishReasonMap;
 use Prism\Bedrock\Schemas\Converse\Maps\MessageMap;
@@ -27,7 +28,7 @@ use Throwable;
 
 class ConverseTextHandler extends BedrockTextHandler
 {
-    use CallsTools, ExtractsText, ExtractsToolCalls;
+    use CallsTools, ExtractsText, ExtractsThinking, ExtractsToolCalls;
 
     protected TextResponse $tempResponse;
 
@@ -120,6 +121,7 @@ class ConverseTextHandler extends BedrockTextHandler
             ),
             meta: new Meta(id: '', model: ''),
             messages: new Collection, // Not provided in Converse response.
+            additionalContent: $this->extractThinking($data),
         );
     }
 
