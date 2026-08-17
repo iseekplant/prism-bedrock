@@ -70,6 +70,9 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
      */
     public static function buildPayload(Request $request): array
     {
+        // NOTE: additionalModelRequestFields (e.g. `thinking`) is forwarded, but this handler does not
+        // extract/round-trip reasoningContent the way ConverseTextHandler/ConverseStreamHandler do.
+        // Structured-output + thinking is not supported end-to-end here.
         return array_filter([
             'additionalModelRequestFields' => $request->providerOptions('additionalModelRequestFields'),
             'additionalModelResponseFieldPaths' => $request->providerOptions('additionalModelResponseFieldPaths'),

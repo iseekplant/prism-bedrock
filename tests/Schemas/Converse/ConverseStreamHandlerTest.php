@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Schemas\Converse;
 
+use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use NumberFormatter;
@@ -217,6 +218,68 @@ it('can handle thinking', function (): void {
 
     expect($events->where(fn ($event): bool => $event->type() === StreamEventType::ThinkingComplete)->sole())
         ->toBeInstanceOf(ThinkingCompleteEvent::class);
+});
+
+it('carries the thinking block into the next request when a tool is called', function (): void {
+    $files = [
+        FixtureResponse::filePath('converse/stream-with-reasoning-then-tool-use-1.sse'),
+        FixtureResponse::filePath('converse/stream-with-reasoning-then-tool-use-2.sse'),
+    ];
+
+    $capturedPayloads = [];
+
+    Http::fake(function (Request $request) use (&$capturedPayloads, &$files): PromiseInterface {
+        $capturedPayloads[] = json_decode($request->body(), true);
+
+        $file = array_shift($files);
+
+        return Http::response(
+            file_get_contents($file),
+            200,
+            [
+                'Content-Type' => 'text/event-stream',
+                'Cache-Control' => 'no-cache',
+                'Connection' => 'keep-alive',
+                'Transfer-Encoding' => 'chunked',
+            ]
+        );
+    });
+
+    $tool = Tool::as('search')
+        ->for('useful for searching')
+        ->withStringParameter('query', 'The search query')
+        ->using(fn (string $query): string => 'contact found: Nyx');
+
+    $events = collect();
+
+    $response = Prism::text()
+        ->using('bedrock', 'us.anthropic.claude-sonnet-4-20250514-v1:0')
+        ->withProviderOptions([
+            'apiSchema' => BedrockSchema::Converse,
+            'additionalModelRequestFields' => [
+                'thinking' => ['type' => 'enabled', 'budget_tokens' => 1024],
+            ],
+        ])
+        ->withTools([$tool])
+        ->withMaxSteps(2)
+        ->withPrompt('Look up the contact named Nyx')
+        ->asStream();
+
+    foreach ($response as $event) {
+        $events->push($event);
+    }
+
+    expect($capturedPayloads)->toHaveCount(2);
+
+    $secondRequestMessages = $capturedPayloads[1]['messages'];
+    $assistantTurn = collect($secondRequestMessages)->firstWhere('role', 'assistant');
+
+    expect($assistantTurn)->not->toBeNull();
+    expect($assistantTurn['content'][0])->toHaveKey('reasoningContent');
+    expect($assistantTurn['content'][0]['reasoningContent']['reasoningText']['text'])
+        ->toBe('I should look up this contact first. Let me call the search tool.');
+    expect($assistantTurn['content'][0]['reasoningContent']['reasoningText']['signature'])
+        ->toBe('sig-EqUCCkgICBABGAIiQI3example1234567890');
 });
 
 describe('citations', function (): void {

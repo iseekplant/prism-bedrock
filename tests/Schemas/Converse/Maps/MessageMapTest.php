@@ -120,7 +120,7 @@ it('maps an image correctly', function (): void {
                 'image' => [
                     'format' => 'png',
                     'source' => ['bytes' => base64_encode(file_get_contents('tests/Fixtures/test-image.png'))],
-                    ],
+                ],
             ],
             ['text' => 'Who are you?'],
         ],
@@ -181,6 +181,76 @@ it('maps assistant message with tool calls with empty arguments as stdClass', fu
             ],
         ],
     ]);
+});
+
+it('prepends a reasoningContent block for assistant messages with thinking', function (): void {
+    expect(MessageMap::map([
+        new AssistantMessage(
+            content: 'I am Nyx',
+            toolCalls: [],
+            additionalContent: [
+                'thinking' => 'Let me consider this carefully.',
+                'thinking_signature' => 'sig-abc123',
+            ],
+        ),
+    ]))->toBe([[
+        'role' => 'assistant',
+        'content' => [
+            [
+                'reasoningContent' => [
+                    'reasoningText' => [
+                        'text' => 'Let me consider this carefully.',
+                        'signature' => 'sig-abc123',
+                    ],
+                ],
+            ],
+            ['text' => 'I am Nyx'],
+        ],
+    ]]);
+});
+
+it('prepends a reasoningContent block without a signature when none is present', function (): void {
+    expect(MessageMap::map([
+        new AssistantMessage(
+            content: 'I am Nyx',
+            toolCalls: [],
+            additionalContent: ['thinking' => 'Thinking without a signature.'],
+        ),
+    ]))->toBe([[
+        'role' => 'assistant',
+        'content' => [
+            ['reasoningContent' => ['reasoningText' => ['text' => 'Thinking without a signature.']]],
+            ['text' => 'I am Nyx'],
+        ],
+    ]]);
+});
+
+it('puts reasoningContent before tool calls and the cache breakpoint', function (): void {
+    expect(MessageMap::map([
+        (new AssistantMessage(
+            content: '',
+            toolCalls: [new ToolCall('tool_1', 'search', ['query' => 'x'])],
+            additionalContent: ['thinking' => 'Reasoning about the search.', 'thinking_signature' => 'sig-1'],
+        ))->withProviderOptions(['cacheType' => 'default']),
+    ]))->toBe([[
+        'role' => 'assistant',
+        'content' => [
+            ['reasoningContent' => ['reasoningText' => ['text' => 'Reasoning about the search.', 'signature' => 'sig-1']]],
+            ['toolUse' => ['toolUseId' => 'tool_1', 'name' => 'search', 'input' => ['query' => 'x']]],
+            ['cachePoint' => ['type' => 'default']],
+        ],
+    ]]);
+});
+
+it('does not add a reasoningContent block when no thinking is present', function (): void {
+    expect(MessageMap::map([
+        new AssistantMessage('I am Nyx'),
+    ]))->toBe([[
+        'role' => 'assistant',
+        'content' => [
+            ['text' => 'I am Nyx'],
+        ],
+    ]]);
 });
 
 it('maps tool result messages', function (): void {

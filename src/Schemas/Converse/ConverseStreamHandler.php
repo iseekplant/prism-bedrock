@@ -177,9 +177,15 @@ class ConverseStreamHandler
         }
 
         if ($toolResults !== []) {
+            $thinkingAdditionalContent = array_filter([
+                'thinking' => $this->state->currentThinking() !== '' ? $this->state->currentThinking() : null,
+                'thinking_signature' => $this->state->currentThinkingSignature() !== '' ? $this->state->currentThinkingSignature() : null,
+            ], fn ($value): bool => $value !== null);
+
             $request->addMessage(new AssistantMessage(
                 content: $this->state->currentText(),
-                toolCalls: $toolCalls
+                toolCalls: $toolCalls,
+                additionalContent: $thinkingAdditionalContent,
             ));
 
             $request->addMessage(new ToolResultMessage($toolResults));
@@ -451,6 +457,10 @@ class ConverseStreamHandler
      */
     protected function handleReasoningContentDelta(array $reasoningContent): Generator
     {
+        if (isset($reasoningContent['signature'])) {
+            $this->state->appendThinkingSignature($reasoningContent['signature']);
+        }
+
         $thinking = $reasoningContent['text'] ?? '';
 
         if ($thinking === '') {

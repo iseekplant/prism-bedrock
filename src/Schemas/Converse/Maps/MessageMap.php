@@ -130,11 +130,32 @@ class MessageMap
         return [
             'role' => 'assistant',
             'content' => array_values(array_filter([
+                self::mapReasoningContent($message->additionalContent),
                 $message->content === '' || $message->content === '0' ? null : ['text' => $message->content],
                 ...self::mapToolCalls($message->toolCalls),
                 ...self::mapCitations($message->additionalContent['citations'] ?? []),
                 $cacheType ? ['cachePoint' => array_filter(['type' => $cacheType, 'ttl' => data_get($message->providerOptions(), 'cacheTtl')])] : null,
             ])),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $additionalContent
+     * @return array<string, mixed>|null
+     */
+    protected static function mapReasoningContent(array $additionalContent): ?array
+    {
+        if (! isset($additionalContent['thinking'])) {
+            return null;
+        }
+
+        return [
+            'reasoningContent' => [
+                'reasoningText' => array_filter([
+                    'text' => $additionalContent['thinking'],
+                    'signature' => $additionalContent['thinking_signature'] ?? null,
+                ], fn ($value): bool => $value !== null),
+            ],
         ];
     }
 
