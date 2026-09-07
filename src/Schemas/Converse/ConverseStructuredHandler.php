@@ -3,10 +3,13 @@
 namespace Prism\Bedrock\Schemas\Converse;
 
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Prism\Bedrock\Contracts\BedrockStructuredHandler;
+use Prism\Bedrock\Schemas\Converse\Concerns\ExtractsToolCalls;
 use Prism\Bedrock\Schemas\Converse\Maps\FinishReasonMap;
 use Prism\Bedrock\Schemas\Converse\Maps\MessageMap;
+use Prism\Bedrock\Schemas\Converse\Maps\ToolChoiceMap;
 use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Structured\Request;
 use Prism\Prism\Structured\Response as StructuredResponse;
@@ -15,11 +18,16 @@ use Prism\Prism\Structured\Step;
 use Prism\Prism\ValueObjects\Messages\AssistantMessage;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Prism\Prism\ValueObjects\Meta;
+use Prism\Prism\ValueObjects\ToolCall;
 use Prism\Prism\ValueObjects\Usage;
 use Throwable;
 
 class ConverseStructuredHandler extends BedrockStructuredHandler
 {
+    use ExtractsToolCalls;
+
+    public const STRUCTURED_OUTPUT_TOOL_NAME = 'output_structured_data';
+
     protected StructuredResponse $tempResponse;
 
     protected Response $httpResponse;
@@ -36,7 +44,11 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
     #[\Override]
     public function handle(Request $request): StructuredResponse
     {
-        if (! $request->providerOptions('validated_schema')) {
+        if ($request->providerOptions('validated_schema') && $request->providerOptions('use_structured_output_tool')) {
+            throw new PrismException('Converse: validated_schema and use_structured_output_tool cannot both be enabled');
+        }
+
+        if (! $request->providerOptions('validated_schema') && ! $request->providerOptions('use_structured_output_tool')) {
             $this->appendMessageForJsonMode($request);
         }
 
@@ -44,9 +56,24 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
 
         $this->prepareTempResponse();
 
+        $toolCalls = [];
+        $structured = [];
+
+        if ($request->providerOptions('use_structured_output_tool')) {
+            $toolCalls = $this->extractToolCalls($this->httpResponse->json());
+
+            $structuredCall = Arr::first($toolCalls, fn (ToolCall $toolCall): bool => $toolCall->name === self::STRUCTURED_OUTPUT_TOOL_NAME);
+
+            if (! $structuredCall instanceof ToolCall) {
+                throw new PrismException('Converse: expected a call to the structured output tool but none was returned');
+            }
+
+            $structured = $structuredCall->arguments();
+        }
+
         $responseMessage = new AssistantMessage(
             content: $this->tempResponse->text,
-            toolCalls: [],
+            toolCalls: $toolCalls,
             additionalContent: $this->tempResponse->additionalContent
         );
 
@@ -60,6 +87,8 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
             messages: $request->messages(),
             systemPrompts: $request->systemPrompts(),
             additionalContent: $this->tempResponse->additionalContent,
+            structured: $structured,
+            toolCalls: $toolCalls,
         ));
 
         return $this->responseBuilder->toResponse();
@@ -100,6 +129,25 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
                                 ],
                             ],
                         ],
+                    ],
+                ] : []),
+            ...($request->providerOptions('use_structured_output_tool')
+                ? [
+                    'toolConfig' => [
+                        'tools' => [[
+                            'toolSpec' => [
+                                'name' => self::STRUCTURED_OUTPUT_TOOL_NAME,
+                                'description' => data_get($request->schema()->toArray(), 'description') ?: 'Output data in the requested structure',
+                                'inputSchema' => [
+                                    'json' => array_filter([
+                                        'type' => 'object',
+                                        'properties' => data_get($request->schema()->toArray(), 'properties', (object) []),
+                                        'required' => data_get($request->schema()->toArray(), 'required', []),
+                                    ]),
+                                ],
+                            ],
+                        ]],
+                        'toolChoice' => ToolChoiceMap::map(self::STRUCTURED_OUTPUT_TOOL_NAME),
                     ],
                 ] : []),
         ]);

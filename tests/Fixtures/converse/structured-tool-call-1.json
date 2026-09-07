@@ -1,0 +1,1 @@
+{"metrics":{"latencyMs":812},"output":{"message":{"content":[{"toolUse":{"input":{"weather":"70º","game_time":"3pm","coat_required":false},"name":"output_structured_data","toolUseId":"tooluse_abc123structured"}}],"role":"assistant"}},"stopReason":"tool_use","usage":{"inputTokens":300,"outputTokens":25,"totalTokens":325}}
