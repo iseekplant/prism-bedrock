@@ -226,6 +226,29 @@ Prism::structured()
     ->asStructured();
 ```
 
+### Tool-call structured output (Converse only)
+
+For Converse API models, you can instead have Prism Bedrock convert your schema into a Bedrock tool and force the model to call it, then capture the structured output from the tool call arguments. This can be more reliable than JSON-mode prompting on models that support tool use but not native structured output:
+
+```php
+use Prism\Prism\Facades\Prism;
+use Prism\Bedrock\Bedrock;
+use Prism\Bedrock\Enums\BedrockSchema;
+
+Prism::structured()
+    ->withSchema($schema)
+    ->using('bedrock', 'anthropic.claude-3-5-haiku-20241022-v1:0')
+    ->withProviderOptions([
+        'apiSchema' => BedrockSchema::Converse,
+        'use_structured_output_tool' => true,
+    ])
+    ->withPrompt('My prompt')
+    ->asStructured();
+```
+
+> [!NOTE]
+> `use_structured_output_tool` and `validated_schema` are mutually exclusive — enabling both will throw an exception.
+
 ## License
 
 The MIT License (MIT). Please see [License File](LICENSE) for more information.

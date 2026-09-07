@@ -6,7 +6,10 @@ namespace Tests\Schemas\Converse;
 
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Pest\Mixins\Expectation;
 use Prism\Bedrock\Enums\BedrockSchema;
+use Prism\Bedrock\Schemas\Converse\ConverseStructuredHandler;
+use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Schema\BooleanSchema;
 use Prism\Prism\Schema\ObjectSchema;
@@ -236,7 +239,7 @@ it('uses validated results when flag is set in provider options', function () {
         'coat_required',
     ]);
 
-    Http::assertSent(fn (Request $request): \Pest\Mixins\Expectation|\Pest\Expectation => expect($request->data())->toMatchArray([
+    Http::assertSent(fn (Request $request): Expectation|\Pest\Expectation => expect($request->data())->toMatchArray([
         'outputConfig' => [
             'textFormat' => [
                 'type' => 'json_schema',
@@ -251,3 +254,99 @@ it('uses validated results when flag is set in provider options', function () {
         ],
     ]));
 });
+
+it('uses a forced tool call to capture structured output when use_structured_output_tool is set', function (): void {
+    FixtureResponse::fakeResponseSequence('converse', 'converse/structured-tool-call');
+
+    $schema = new ObjectSchema(
+        'output',
+        'the output object',
+        [
+            new StringSchema('weather', 'The weather forecast'),
+            new StringSchema('game_time', 'The tigers game time'),
+            new BooleanSchema('coat_required', 'whether a coat is required'),
+        ],
+        ['weather', 'game_time', 'coat_required']
+    );
+
+    $response = Prism::structured()
+        ->withSchema($schema)
+        ->using('bedrock', 'us.anthropic.claude-haiku-4-5-20251001-v1:0')
+        ->withProviderOptions(['apiSchema' => BedrockSchema::Converse, 'use_structured_output_tool' => true])
+        ->withSystemPrompt('The tigers game is at 3pm and the temperature will be 70º')
+        ->withPrompt('What time is the tigers game today and should I wear a coat?')
+        ->asStructured();
+
+    expect($response->structured)->toBe([
+        'weather' => '70º',
+        'game_time' => '3pm',
+        'coat_required' => false,
+    ]);
+
+    Http::assertSent(fn (Request $request): Expectation|\Pest\Expectation => expect($request->data())->toMatchArray([
+        'toolConfig' => [
+            'tools' => [[
+                'toolSpec' => [
+                    'name' => ConverseStructuredHandler::STRUCTURED_OUTPUT_TOOL_NAME,
+                    'description' => 'the output object',
+                    'inputSchema' => [
+                        'json' => [
+                            'type' => 'object',
+                            'properties' => $schema->toArray()['properties'],
+                            'required' => $schema->toArray()['required'],
+                        ],
+                    ],
+                ],
+            ]],
+            'toolChoice' => [
+                'tool' => [
+                    'name' => ConverseStructuredHandler::STRUCTURED_OUTPUT_TOOL_NAME,
+                ],
+            ],
+        ],
+    ]));
+});
+
+it('throws when the model does not call the structured output tool', function (): void {
+    FixtureResponse::fakeResponseSequence('converse', 'converse/structured');
+
+    $schema = new ObjectSchema(
+        'output',
+        'the output object',
+        [
+            new StringSchema('weather', 'The weather forecast'),
+            new StringSchema('game_time', 'The tigers game time'),
+            new BooleanSchema('coat_required', 'whether a coat is required'),
+        ],
+        ['weather', 'game_time', 'coat_required']
+    );
+
+    Prism::structured()
+        ->withSchema($schema)
+        ->using('bedrock', 'us.anthropic.claude-haiku-4-5-20251001-v1:0')
+        ->withProviderOptions(['apiSchema' => BedrockSchema::Converse, 'use_structured_output_tool' => true])
+        ->withPrompt('What time is the tigers game today and should I wear a coat?')
+        ->asStructured();
+})->throws(PrismException::class);
+
+it('throws when both validated_schema and use_structured_output_tool are enabled', function (): void {
+    $schema = new ObjectSchema(
+        'output',
+        'the output object',
+        [
+            new StringSchema('weather', 'The weather forecast'),
+        ],
+        ['weather']
+    );
+
+    Prism::structured()
+        ->withSchema($schema)
+        ->using('bedrock', 'us.anthropic.claude-haiku-4-5-20251001-v1:0')
+        ->withProviderOptions([
+            'apiSchema' => BedrockSchema::Converse,
+            'validated_schema' => true,
+            'use_structured_output_tool' => true,
+        ])
+        ->withPrompt('What time is the tigers game today and should I wear a coat?')
+        ->asStructured();
+})->throws(PrismException::class);
