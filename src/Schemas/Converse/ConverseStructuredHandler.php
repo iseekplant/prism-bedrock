@@ -56,24 +56,13 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
 
         $this->prepareTempResponse();
 
-        $toolCalls = [];
-        $structured = [];
-
         if ($request->providerOptions('use_structured_output_tool')) {
-            $toolCalls = $this->extractToolCalls($this->httpResponse->json());
-
-            $structuredCall = Arr::first($toolCalls, fn (ToolCall $toolCall): bool => $toolCall->name === self::STRUCTURED_OUTPUT_TOOL_NAME);
-
-            if (! $structuredCall instanceof ToolCall) {
-                throw new PrismException('Converse: expected a call to the structured output tool but none was returned');
-            }
-
-            $structured = $structuredCall->arguments();
+            $this->tempResponse = $this->applyStructuredOutputTool($this->tempResponse);
         }
 
         $responseMessage = new AssistantMessage(
             content: $this->tempResponse->text,
-            toolCalls: $toolCalls,
+            toolCalls: [],
             additionalContent: $this->tempResponse->additionalContent
         );
 
@@ -87,11 +76,31 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
             messages: $request->messages(),
             systemPrompts: $request->systemPrompts(),
             additionalContent: $this->tempResponse->additionalContent,
-            structured: $structured,
-            toolCalls: $toolCalls,
+            structured: $this->tempResponse->structured ?? [],
         ));
 
         return $this->responseBuilder->toResponse();
+    }
+
+    protected function applyStructuredOutputTool(StructuredResponse $response): StructuredResponse
+    {
+        $toolCalls = $this->extractToolCalls($this->httpResponse->json());
+
+        $structuredCall = Arr::first($toolCalls, fn (ToolCall $toolCall): bool => $toolCall->name === self::STRUCTURED_OUTPUT_TOOL_NAME);
+
+        if (! $structuredCall instanceof ToolCall) {
+            throw new PrismException('Converse: expected a call to the structured output tool but none was returned');
+        }
+
+        return new StructuredResponse(
+            steps: $response->steps,
+            text: $response->text,
+            structured: $structuredCall->arguments(),
+            finishReason: $response->finishReason,
+            usage: $response->usage,
+            meta: $response->meta,
+            additionalContent: $response->additionalContent,
+        );
     }
 
     /**
