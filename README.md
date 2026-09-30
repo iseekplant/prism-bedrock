@@ -1,3 +1,9 @@
+# Prism Bedrock
+
+> An iseekplant fork of the Prism Bedrock package.
+
+A Laravel provider for the [Prism PHP](https://github.com/prism-php/prism) AI framework that unlocks AWS Bedrock models. Used by iseekplant services to interact with LLMs (e.g. Claude) via AWS Bedrock.
+
 # Prism Bedorck
 
 > This is a fork of prism bedrock maintained by iseekplant
