@@ -369,6 +369,22 @@ it('replaces any manual cachePoints with a single one on the last message when c
     });
 });
 
+it('does not error when cacheLastMessage is enabled and there are no messages', function (): void {
+    FixtureResponse::fakeResponseSequence('converse', 'converse/generate-text-with-a-prompt');
+
+    Prism::text()
+        ->using('bedrock', 'amazon.nova-micro-v1:0')
+        ->withProviderOptions(['cacheLastMessage' => true])
+        ->withSystemPrompt('You are a helpful assistant.')
+        ->asText();
+
+    Http::assertSent(function (Request $request): bool {
+        expect($request->data())->not->toHaveKey('messages');
+
+        return true;
+    });
+});
+
 it('does not remove zero values from payload', function (): void {
     FixtureResponse::fakeResponseSequence('converse', 'converse/generate-text-with-a-prompt');
 

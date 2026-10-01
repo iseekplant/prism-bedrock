@@ -73,7 +73,7 @@ class ConverseTextHandler extends BedrockTextHandler
     {
         $messages = MessageMap::map($request->messages());
 
-        if ($request->providerOptions('cacheLastMessage') === true) {
+        if ($messages !== [] && $request->providerOptions('cacheLastMessage') === true) {
             $messages = collect($messages)
                 ->map(fn (array $message) => [
                     ...$message,
