@@ -202,6 +202,24 @@ $response = Prism::text()
 > [!TIP]
 > Anthropic currently supports a cacheType of "ephemeral". Converse currently supports a cacheType of "default". It is possible that Anthropic and/or AWS may add additional types in the future.
 
+### Automatically Cache the Last Message (Converse only)
+
+Rather than managing cache breakpoints on individual messages yourself, you can set the `cacheLastMessage` provider option to automatically move the cache breakpoint to the last message of every request. This is useful for multi-turn conversations, where you want to cache as much of the growing conversation history as possible on each turn.
+
+```php
+use Prism\Prism\Facades\Prism;
+use Prism\Bedrock\Bedrock;
+
+$response = Prism::text()
+    ->using(Bedrock::KEY, 'anthropic.claude-3-sonnet-20240229-v1:0')
+    ->withProviderOptions(['cacheLastMessage' => true])
+    ->withPrompt('Explain quantum computing in simple terms')
+    ->asText();
+```
+
+> [!TIP]
+> When enabled, any manual `cacheType` breakpoints are removed and replaced with a single breakpoint on the last message.
+
 ## Structured Adapted Support
 
 Anthropic does not support a native structured format. 
