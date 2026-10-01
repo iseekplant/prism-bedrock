@@ -3,6 +3,7 @@
 namespace Prism\Bedrock\Schemas\Converse;
 
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Prism\Bedrock\Contracts\BedrockTextHandler;
 use Prism\Bedrock\Schemas\Converse\Concerns\ExtractsText;
@@ -70,13 +71,26 @@ class ConverseTextHandler extends BedrockTextHandler
      */
     public static function buildPayload(Request $request, int $stepCount = 0): array
     {
+        $messages = MessageMap::map($request->messages());
+
+        if ($request->providerOptions('cacheLastMessage') === true) {
+            $messages = collect($messages)
+                ->map(fn (array $message) => [
+                    ...$message,
+                    'content' => array_values(Arr::reject($message['content'], fn ($content) => ! empty($content['cachePoint']))),
+                ])
+                ->all();
+
+            $messages[count($messages) - 1]['content'][] = ['cachePoint' => ['type' => 'default']];
+        }
+
         return array_filter([
             'inferenceConfig' => array_filter([
                 'maxTokens' => $request->maxTokens(),
                 'temperature' => $request->temperature(),
                 'topP' => $request->topP(),
             ], fn (mixed $value): bool => $value !== null),
-            'messages' => MessageMap::map($request->messages()),
+            'messages' => $messages,
             'system' => MessageMap::mapSystemMessages($request->systemPrompts()),
             'toolConfig' => $request->tools() === []
                 ? null

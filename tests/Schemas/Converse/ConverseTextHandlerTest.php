@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Schemas\Converse;
 
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
 use Prism\Bedrock\Enums\BedrockSchema;
 use Prism\Prism\Facades\Prism;
@@ -305,6 +306,67 @@ it('maps converse options when set with providerOptions', function (): void {
         ->asText();
 
     $fake->assertRequest(fn (array $requests): mixed => expect($requests[0]->providerOptions())->toBe($providerOptions));
+});
+
+it('does not add a cachePoint to the last message by default', function (): void {
+    FixtureResponse::fakeResponseSequence('converse', 'converse/generate-text-with-a-prompt');
+
+    Prism::text()
+        ->using('bedrock', 'amazon.nova-micro-v1:0')
+        ->withPrompt('Who are you?')
+        ->asText();
+
+    Http::assertSent(function (Request $request): bool {
+        $lastMessage = Arr::last($request->data()['messages']);
+
+        expect(Arr::pluck($lastMessage['content'], 'cachePoint'))->not->toContain(['type' => 'default']);
+
+        return true;
+    });
+});
+
+it('adds a cachePoint to the last message when the cacheLastMessage provider option is enabled', function (): void {
+    FixtureResponse::fakeResponseSequence('converse', 'converse/generate-text-with-a-prompt');
+
+    Prism::text()
+        ->using('bedrock', 'amazon.nova-micro-v1:0')
+        ->withProviderOptions(['cacheLastMessage' => true])
+        ->withMessages([
+            new UserMessage('Who are you?'),
+            new UserMessage('No really, who are you?'),
+        ])
+        ->asText();
+
+    Http::assertSent(function (Request $request): bool {
+        $messages = $request->data()['messages'];
+
+        expect(Arr::last($messages)['content'])->toContain(['cachePoint' => ['type' => 'default']]);
+        expect(Arr::first($messages)['content'])->not->toContain(['cachePoint' => ['type' => 'default']]);
+
+        return true;
+    });
+});
+
+it('replaces any manual cachePoints with a single one on the last message when cacheLastMessage is enabled', function (): void {
+    FixtureResponse::fakeResponseSequence('converse', 'converse/generate-text-with-a-prompt');
+
+    Prism::text()
+        ->using('bedrock', 'amazon.nova-micro-v1:0')
+        ->withProviderOptions(['cacheLastMessage' => true])
+        ->withMessages([
+            (new UserMessage('Who are you?'))->withProviderOptions(['cacheType' => 'default']),
+            new UserMessage('No really, who are you?'),
+        ])
+        ->asText();
+
+    Http::assertSent(function (Request $request): bool {
+        $messages = $request->data()['messages'];
+
+        expect(Arr::first($messages)['content'])->not->toContain(['cachePoint' => ['type' => 'default']]);
+        expect(Arr::last($messages)['content'])->toContain(['cachePoint' => ['type' => 'default']]);
+
+        return true;
+    });
 });
 
 it('does not remove zero values from payload', function (): void {
