@@ -130,12 +130,7 @@ class ConverseStreamHandler
                 $success = true;
                 $error = null;
                 
-                try {
-                    $args = $toolCall->arguments();
-                } catch (JsonException $jsonException) {
-                    $args = [];
-                    $error = sprintf("Failed to decode tool call arguments: %s \n%s", json_last_error_msg(), (string) $toolCall->arguments);
-                }
+                $args = $toolCall->arguments();
 
                 $result = call_user_func_array(
                     $tool->handle(...),
@@ -220,6 +215,17 @@ class ConverseStreamHandler
     {
         return array_values(array_map(function (array $toolCall): ToolCall {
             $input = data_get($toolCall, 'input');
+            
+            // Parse the JSON input
+            if (is_string($input) && json_validate($input)) {
+                $input = json_decode($input, true);
+            } elseif (is_string($input) && $input !== '') {
+                // If it's not valid JSON but not empty, wrap in array
+                $input = ['input' => $input];
+            } else {
+                $input = [];
+            }
+
             if (is_string($input) && $this->isValidJson($input)) {
                 $input = json_decode($input, true);
             }
