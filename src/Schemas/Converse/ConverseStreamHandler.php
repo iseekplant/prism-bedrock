@@ -127,25 +127,25 @@ class ConverseStreamHandler
             $tool = $this->resolveTool($toolCall->name, $request->tools());
 
             try {
-                $result = call_user_func_array(
-                    $tool->handle(...),
-                    $toolCall->arguments()
-                );
-
                 $success = true;
                 $error = null;
+                
+                try {
+                    $args = $toolCall->arguments();
+                } catch (JsonException $jsonException) {
+                    $args = [];
+                    $error = sprintf("Failed to decode tool call arguments: %s \n%s", json_last_error_msg(), (string) $toolCall->arguments);
+                }
+
+                $result = call_user_func_array(
+                    $tool->handle(...),
+                    $args
+                );
 
                 if ($result instanceof ToolError) {
                     $result = $result->message;
                     $success = false;
                     $error = $result;
-                }
-
-                try {
-                    $args = $toolCall->arguments();
-                } catch (JsonException $jsonException) {
-                    $args = [];
-                    $error = sprintf('Failed to decode tool call arguments: %s', json_last_error_msg());
                 }
 
                 $toolResult = new ToolResult(
