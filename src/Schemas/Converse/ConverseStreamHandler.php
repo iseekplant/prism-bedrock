@@ -7,6 +7,7 @@ use Aws\Api\Parser\NonSeekableStreamDecodingEventStreamIterator;
 use Generator;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
+use JsonException;
 use Prism\Bedrock\Bedrock;
 use Prism\Bedrock\Schemas\Converse\Maps\CitationsMapper;
 use Prism\Bedrock\Schemas\Converse\Maps\FinishReasonMap;
@@ -140,10 +141,17 @@ class ConverseStreamHandler
                     $error = $result;
                 }
 
+                try {
+                    $args = $toolCall->arguments();
+                } catch (JsonException $jsonException) {
+                    $args = [];
+                    $error = sprintf('Failed to decode tool call arguments: %s', json_last_error_msg());
+                }
+
                 $toolResult = new ToolResult(
                     toolCallId: $toolCall->id,
                     toolName: $toolCall->name,
-                    args: $toolCall->arguments(),
+                    args: $args,
                     result: $result,
                 );
 
