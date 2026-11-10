@@ -274,3 +274,4 @@ The MIT License (MIT). Please see [License File](LICENSE) for more information.
 ## Authors
 
 This library is created by [TJ Miller](https://tjmiller.me) with contributions from the [Open Source Community](https://github.com/echolabsdev/prism-bedrock/graphs/contributors).
+
