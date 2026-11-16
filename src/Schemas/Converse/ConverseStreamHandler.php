@@ -258,9 +258,23 @@ class ConverseStreamHandler
      */
     protected function processEvent(array $event): null|StreamEvent|Generator
     {
-        $json = json_decode((string) $event['payload'], true);
+        $json = json_decode((string) $event['payload'], true) ?? [];
 
-        return match ($event['headers'][':event-type']) {
+        return match ($event['headers'][':message-type'] ?? 'event') {
+            'exception', 'error' => $this->handleError(
+                $event['headers'][':exception-type'] ?? $event['headers'][':error-code'] ?? null,
+                $json
+            ),
+            default => $this->processTypedEvent($event['headers'][':event-type'] ?? null, $json),
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $json
+     */
+    protected function processTypedEvent(?string $eventType, array $json): null|StreamEvent|Generator
+    {
+        return match ($eventType) {
             'messageStart' => $this->handleMessageStart($json),
             'contentBlockStart' => $this->handleContentBlockStart($json),
             'contentBlockDelta' => $this->handleContentBlockDelta($json),
@@ -271,7 +285,7 @@ class ConverseStreamHandler
             'throttlingException',
             'modelStreamErrorException',
             'serviceUnavailableException',
-            'validationException' => $this->handleError($json),
+            'validationException' => $this->handleError($eventType, $json),
             default => null,
         };
     }
@@ -408,19 +422,19 @@ class ConverseStreamHandler
     }
 
     /**
-     * @param  array<string, mixed>  $event
+     * @param  array<string, mixed>  $payload
      * @return never
      */
-    protected function handleError(array $event)
+    protected function handleError(?string $exceptionType, array $payload)
     {
-        if ($event[':headers']['event-type'] === 'throttlingException') {
-            throw PrismRateLimitedException::make();
-        }
-
-        throw PrismException::providerResponseError(vsprintf(
-            'Bedrock Converse Stream Error: %s',
-            $event[':headers']['event-type']
-        ));
+        throw match ($exceptionType) {
+            'throttlingException' => PrismRateLimitedException::make(),
+            default => PrismException::providerResponseError(sprintf(
+                'Bedrock Converse Stream Error (%s): %s',
+                $exceptionType ?? 'unknown',
+                $payload['message'] ?? $payload['Message'] ?? 'Unknown error'
+            )),
+        };
     }
 
     protected function handleTextDelta(string $text): ?TextDeltaEvent

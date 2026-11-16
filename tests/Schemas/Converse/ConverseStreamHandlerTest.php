@@ -13,6 +13,8 @@ use Prism\Prism\Enums\Citations\CitationSourcePositionType;
 use Prism\Prism\Enums\Citations\CitationSourceType;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Enums\StreamEventType;
+use Prism\Prism\Exceptions\PrismException;
+use Prism\Prism\Exceptions\PrismRateLimitedException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Facades\Tool;
 use Prism\Prism\Streaming\Events\CitationEvent;
@@ -410,4 +412,62 @@ describe('citations', function (): void {
         expect($lastEvent->citations[0]->citations[0])->toBeInstanceOf(Citation::class);
         expect($lastEvent->finishReason)->toBe(FinishReason::Stop);
     });
+});
+
+describe('exception frames', function (): void {
+    function eventStreamFrame(array $headers, string $payload): string
+    {
+        $encodedHeaders = collect($headers)
+            ->map(fn (string $value, string $name): string => pack('C', strlen($name)).$name.pack('C', 7).pack('n', strlen($value)).$value)
+            ->implode('');
+
+        $prelude = pack('N', strlen($encodedHeaders) + strlen($payload) + 16).pack('N', strlen($encodedHeaders));
+        $message = $prelude.pack('N', crc32($prelude)).$encodedHeaders.$payload;
+
+        return $message.pack('N', crc32($message));
+    }
+
+    function fakeExceptionFrame(string $exceptionType, string $message): void
+    {
+        Http::fake([
+            'converse-stream' => Http::response(
+                eventStreamFrame([
+                    ':message-type' => 'exception',
+                    ':exception-type' => $exceptionType,
+                    ':content-type' => 'application/json',
+                ], json_encode(['message' => $message])),
+                200,
+                ['Content-Type' => 'application/vnd.amazon.eventstream']
+            ),
+        ])->preventStrayRequests();
+    }
+
+    function consumeStream(): void
+    {
+        iterator_to_array(
+            Prism::text()
+                ->using('bedrock', 'us.amazon.nova-micro-v1:0')
+                ->withProviderOptions(['apiSchema' => BedrockSchema::Converse])
+                ->withPrompt('Who are you?')
+                ->asStream()
+        );
+    }
+
+    it('throws a rate limited exception for throttlingException frames', function (): void {
+        fakeExceptionFrame('throttlingException', 'Too many requests');
+
+        consumeStream();
+    })->throws(PrismRateLimitedException::class);
+
+    it('throws a prism exception with the payload message for other exception frames', function (): void {
+        fakeExceptionFrame('modelStreamErrorException', 'Model stream failed');
+
+        consumeStream();
+    })->throws(PrismException::class, 'modelStreamErrorException');
+
+    it('includes the payload message in the exception', function (): void {
+        fakeExceptionFrame('validationException', 'Bad input');
+
+        consumeStream();
+    })->throws(PrismException::class, 'Bad input');
 });
