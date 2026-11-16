@@ -260,7 +260,9 @@ class ConverseStreamHandler
     {
         $json = json_decode((string) $event['payload'], true);
 
-        return match ($event['headers'][':event-type']) {
+        return match ($event['headers'][':event-type'] ?? throw new PrismException(
+            'Bedrock Converse Stream event is missing :event-type header: '.json_encode([...$event, 'payload' => (string) $event['payload']], JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR)
+        )) {
             'messageStart' => $this->handleMessageStart($json),
             'contentBlockStart' => $this->handleContentBlockStart($json),
             'contentBlockDelta' => $this->handleContentBlockDelta($json),
