@@ -18,6 +18,7 @@ use Prism\Prism\Facades\Prism;
 use Prism\Prism\Facades\Tool;
 use Prism\Prism\Streaming\Events\CitationEvent;
 use Prism\Prism\Streaming\Events\ErrorEvent;
+use Prism\Prism\Streaming\Events\StepFinishEvent;
 use Prism\Prism\Streaming\Events\StreamEndEvent;
 use Prism\Prism\Streaming\Events\StreamEvent;
 use Prism\Prism\Streaming\Events\StreamStartEvent;
@@ -35,6 +36,18 @@ use Prism\Prism\ValueObjects\Messages\SystemMessage;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Tests\Fixtures\EventStreamEncoder;
 use Tests\Fixtures\FixtureResponse;
+
+/**
+ * @param  array<int, StreamEvent>  $events
+ */
+function streamEndEvent(array $events): StreamEndEvent
+{
+    $streamEnds = array_values(array_filter($events, fn (StreamEvent $event): bool => $event instanceof StreamEndEvent));
+
+    expect($streamEnds)->not->toBeEmpty();
+
+    return end($streamEnds);
+}
 
 it('streams output', function (): void {
     FixtureResponse::fakeStreamResponses('converse-stream', 'converse/stream-basic-text');
@@ -58,7 +71,7 @@ it('streams output', function (): void {
     expect($events)->not->toBeEmpty();
     expect($text)->not->toBeEmpty();
 
-    $finalEvent = end($events);
+    $finalEvent = streamEndEvent($events);
 
     expect($finalEvent->finishReason)->toBe(FinishReason::Stop);
 
@@ -105,7 +118,7 @@ it('can return usage with a basic stream', function (): void {
         }
     }
 
-    expect((array) end($event)->usage)->toBe([
+    expect((array) streamEndEvent($event)->usage)->toBe([
         'promptTokens' => 67,
         'completionTokens' => 48,
         'cacheWriteInputTokens' => 131,
@@ -165,7 +178,7 @@ it('can handle tool calls', function (): void {
     expect($events)->not->toBeEmpty();
     expect($toolCallFound)->toBeTrue('Expected to find at least one tool call in the stream');
 
-    $lastEvent = end($events);
+    $lastEvent = streamEndEvent($events);
     expect($lastEvent)->toBeInstanceOf(StreamEndEvent::class);
     expect($lastEvent->finishReason)->toBe(FinishReason::Stop);
 
@@ -322,7 +335,7 @@ describe('citations', function (): void {
             }
         }
 
-        $lastEvent = end($events);
+        $lastEvent = streamEndEvent($events);
 
         // Check that citation events were emitted
         expect($citationEvents)->not->toBeEmpty();
@@ -398,7 +411,7 @@ describe('citations', function (): void {
             }
         }
 
-        $lastEvent = end($events);
+        $lastEvent = streamEndEvent($events);
 
         // Check that citation events were emitted
         expect($citationEvents)->not->toBeEmpty();
@@ -482,7 +495,7 @@ it('retries the request when a retryable exception is streamed', function (): vo
     $events = streamConverseEvents();
 
     Http::assertSentCount(2);
-    expect(end($events))->toBeInstanceOf(StreamEndEvent::class);
+    expect(streamEndEvent($events))->toBeInstanceOf(StreamEndEvent::class);
 });
 
 it('yields a recoverable error event before retrying', function (): void {
@@ -544,5 +557,56 @@ it('retries when a retryable exception is streamed after partial output', functi
 
     expect($errorIndex)->toBe(3)
         ->and($types[$errorIndex + 1])->toBe(StreamStartEvent::class)
-        ->and(end($events))->toBeInstanceOf(StreamEndEvent::class);
+        ->and(streamEndEvent($events))->toBeInstanceOf(StreamEndEvent::class);
+});
+
+it('emits a step finish event for each completed step so consumers can checkpoint', function (): void {
+    fakeConverseStreamSequence(successfulConverseStream());
+
+    $events = streamConverseEvents();
+
+    expect(array_filter($events, fn (StreamEvent $event): bool => $event instanceof StepFinishEvent))->toHaveCount(1);
+});
+
+it('emits a step finish event before the retry request after a tool call', function (): void {
+    $toolStream = EventStreamEncoder::encode([
+        ['messageStart', ['role' => 'assistant']],
+        ['contentBlockStart', [
+            'contentBlockIndex' => 0,
+            'start' => ['toolUse' => ['toolUseId' => 'tooluse_test', 'name' => 'lookup']],
+        ]],
+        ['contentBlockDelta', ['contentBlockIndex' => 0, 'delta' => ['toolUse' => ['input' => '{"q":"x"}']]]],
+        ['contentBlockStop', ['contentBlockIndex' => 0]],
+        ['messageStop', ['stopReason' => 'tool_use']],
+        ['metadata', [
+            'usage' => ['inputTokens' => 1, 'outputTokens' => 1, 'totalTokens' => 2],
+            'metrics' => ['latencyMs' => 10],
+        ]],
+    ]);
+
+    fakeConverseStreamSequence(
+        $toolStream,
+        EventStreamEncoder::exception('throttlingException', ['message' => 'Slow down', 'retryable' => true]),
+        successfulConverseStream(),
+    );
+
+    $events = iterator_to_array(
+        Prism::text()
+            ->using('bedrock', 'us.amazon.nova-micro-v1:0')
+            ->withProviderOptions(['apiSchema' => BedrockSchema::Converse])
+            ->withTools([
+                Tool::as('lookup')->for('Look something up')->withStringParameter('q', 'query')->using(fn (string $q): string => 'ok'),
+            ])
+            ->withMaxSteps(3)
+            ->withPrompt('Look it up')
+            ->asStream(),
+        false
+    );
+
+    $types = array_map(fn (StreamEvent $event): string => $event::class, $events);
+    $stepFinish = array_search(StepFinishEvent::class, $types, true);
+    $error = array_search(ErrorEvent::class, $types, true);
+
+    expect($stepFinish)->not->toBeFalse()
+        ->and($error)->toBeGreaterThan($stepFinish);
 });

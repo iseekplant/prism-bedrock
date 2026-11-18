@@ -18,6 +18,7 @@ use Prism\Prism\Exceptions\PrismRateLimitedException;
 use Prism\Prism\Streaming\EventID;
 use Prism\Prism\Streaming\Events\CitationEvent;
 use Prism\Prism\Streaming\Events\ErrorEvent;
+use Prism\Prism\Streaming\Events\StepFinishEvent;
 use Prism\Prism\Streaming\Events\StreamEndEvent;
 use Prism\Prism\Streaming\Events\StreamEvent;
 use Prism\Prism\Streaming\Events\StreamStartEvent;
@@ -138,7 +139,15 @@ class ConverseStreamHandler
 
         if ($this->state->hasToolCalls()) {
             yield from $this->handleToolCalls($request, $this->mapToolCalls(), $depth);
+
+            return;
         }
+
+        $this->state->markStepFinished();
+        yield new StepFinishEvent(
+            id: EventID::generate(),
+            timestamp: time()
+        );
     }
 
     /**
@@ -206,6 +215,11 @@ class ConverseStreamHandler
         }
 
         if ($toolResults !== []) {
+            $this->state->markStepFinished();
+            yield new StepFinishEvent(
+                id: EventID::generate(),
+                timestamp: time()
+            );
             $thinkingAdditionalContent = array_filter([
                 'thinking' => $this->state->currentThinking() !== '' ? $this->state->currentThinking() : null,
                 'thinking_signature' => $this->state->currentThinkingSignature() !== '' ? $this->state->currentThinkingSignature() : null,
