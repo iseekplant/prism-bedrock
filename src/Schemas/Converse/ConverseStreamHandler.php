@@ -7,8 +7,8 @@ use Aws\Api\Parser\NonSeekableStreamDecodingEventStreamIterator;
 use Generator;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
-use JsonException;
 use Prism\Bedrock\Bedrock;
+use Prism\Bedrock\Exceptions\PrismBedrockException;
 use Prism\Bedrock\Schemas\Converse\Maps\CitationsMapper;
 use Prism\Bedrock\Schemas\Converse\Maps\FinishReasonMap;
 use Prism\Bedrock\ValueObjects\ConverseStreamState;
@@ -17,6 +17,8 @@ use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Exceptions\PrismRateLimitedException;
 use Prism\Prism\Streaming\EventID;
 use Prism\Prism\Streaming\Events\CitationEvent;
+use Prism\Prism\Streaming\Events\ErrorEvent;
+use Prism\Prism\Streaming\Events\StepFinishEvent;
 use Prism\Prism\Streaming\Events\StreamEndEvent;
 use Prism\Prism\Streaming\Events\StreamEvent;
 use Prism\Prism\Streaming\Events\StreamStartEvent;
@@ -48,7 +50,7 @@ class ConverseStreamHandler
 
     public function __construct(protected PendingRequest $client)
     {
-        $this->state = new ConverseStreamState;
+        $this->state = new ConverseStreamState();
     }
 
     /**
@@ -56,9 +58,34 @@ class ConverseStreamHandler
      */
     public function handle(Request $request): Generator
     {
-        $response = $this->sendRequest($request);
+        yield from $this->streamRequest($request);
+    }
 
-        yield from $this->processStream($response, $request);
+    /**
+     * @return Generator<StreamEvent>
+     */
+    public function streamRequest(Request $request, int $depth = 0, int $attempts = 0): Generator
+    {
+        try {
+            $response = $this->sendRequest($request);
+            yield from $this->processStream($response, $request, $depth);
+        } catch (PrismBedrockException $e) {
+            $attempts++;
+            if ($e->isRetryable && $attempts < 3) {
+                yield new ErrorEvent(
+                    id: EventID::generate(),
+                    timestamp: time(),
+                    errorType: 'retryable_stream_exception',
+                    message: $e->getMessage(),
+                    recoverable: true,
+                    metadata: ['attempt' => $attempts],
+                );
+
+                yield from $this->streamRequest($request, $depth, $attempts);
+            } else {
+                throw $e->retryable(false);
+            }
+        }
     }
 
     /**
@@ -100,8 +127,8 @@ class ConverseStreamHandler
             $decoder = new NonSeekableStreamDecodingEventStreamIterator($stream);
         }
 
-        foreach ($decoder as $event) {
-            $streamEvent = $this->processEvent($event);
+        foreach ($decoder as $message) {
+            $streamEvent = $this->processMessage($message);
 
             if ($streamEvent instanceof Generator) {
                 yield from $streamEvent;
@@ -112,7 +139,15 @@ class ConverseStreamHandler
 
         if ($this->state->hasToolCalls()) {
             yield from $this->handleToolCalls($request, $this->mapToolCalls(), $depth);
+
+            return;
         }
+
+        $this->state->markStepFinished();
+        yield new StepFinishEvent(
+            id: EventID::generate(),
+            timestamp: time()
+        );
     }
 
     /**
@@ -129,7 +164,7 @@ class ConverseStreamHandler
             try {
                 $success = true;
                 $error = null;
-                
+
                 $args = $toolCall->arguments();
 
                 $result = call_user_func_array(
@@ -180,6 +215,11 @@ class ConverseStreamHandler
         }
 
         if ($toolResults !== []) {
+            $this->state->markStepFinished();
+            yield new StepFinishEvent(
+                id: EventID::generate(),
+                timestamp: time()
+            );
             $thinkingAdditionalContent = array_filter([
                 'thinking' => $this->state->currentThinking() !== '' ? $this->state->currentThinking() : null,
                 'thinking_signature' => $this->state->currentThinkingSignature() !== '' ? $this->state->currentThinkingSignature() : null,
@@ -196,9 +236,7 @@ class ConverseStreamHandler
             // Continue streaming if within step limit
             $depth++;
             if ($depth < $request->maxSteps()) {
-                $this->state->reset();
-                $nextResponse = $this->sendRequest($request);
-                yield from $this->processStream($nextResponse, $request, $depth);
+                yield from $this->streamRequest($request, $depth);
             }
         }
     }
@@ -215,7 +253,7 @@ class ConverseStreamHandler
     {
         return array_values(array_map(function (array $toolCall): ToolCall {
             $input = data_get($toolCall, 'input');
-            
+
             // Parse the JSON input
             if (is_string($input) && json_validate($input)) {
                 $input = json_decode($input, true);
@@ -254,13 +292,17 @@ class ConverseStreamHandler
     }
 
     /**
-     * @param  array<string, mixed>  $event
+     * @param  array<string, mixed>  $message
      */
-    protected function processEvent(array $event): null|StreamEvent|Generator
+    protected function processMessage(array $message): null|StreamEvent|Generator
     {
-        $json = json_decode((string) $event['payload'], true);
+        if ($message['headers'][':message-type'] === 'exception') {
+            $this->handleException($message);
+        }
 
-        return match ($this->eventType($event)) {
+        $json = json_decode((string) $message['payload'], true);
+
+        return match ($message['headers'][':event-type'] ?? null) {
             'messageStart' => $this->handleMessageStart($json),
             'contentBlockStart' => $this->handleContentBlockStart($json),
             'contentBlockDelta' => $this->handleContentBlockDelta($json),
@@ -272,18 +314,18 @@ class ConverseStreamHandler
             'modelStreamErrorException',
             'serviceUnavailableException',
             'validationException' => $this->handleError($json),
-            default => null,
+            default => $this->unknownMessage($message),
         };
     }
 
     /**
-     * @param  array<string, mixed>  $event
+     * @param  array<string, mixed>  $message
      */
-    protected function eventType(array $event): string
+    protected function unknownMessage(array $message): string
     {
-        return $event['headers'][':event-type'] ?? throw new PrismException(
-            'Bedrock Converse Stream event is missing :event-type header: '.json_encode(
-                [...$event, 'payload' => (string) $event['payload']],
+        return $message['headers'][':event-type'] ?? throw new PrismException(
+            'Unknown message format: '.json_encode(
+                [...$message, 'payload' => (string) $message['payload']],
                 JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR
             )
         );
@@ -418,6 +460,20 @@ class ConverseStreamHandler
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $event
+     * @return never
+     */
+    protected function handleException(array $event): void
+    {
+        $json = json_decode((string) $event['payload'], true);
+
+        throw tap(new PrismBedrockException(sprintf(
+            'Bedrock Converse Stream Exception: %s',
+            $json['message'] ?? 'Unknown error'
+        )))->retryable($json['retryable'] ?? false);
     }
 
     /**

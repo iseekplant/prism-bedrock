@@ -9,16 +9,19 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use NumberFormatter;
 use Prism\Bedrock\Enums\BedrockSchema;
+use Prism\Bedrock\Exceptions\PrismBedrockException;
 use Prism\Prism\Enums\Citations\CitationSourcePositionType;
 use Prism\Prism\Enums\Citations\CitationSourceType;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Enums\StreamEventType;
-use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Facades\Tool;
 use Prism\Prism\Streaming\Events\CitationEvent;
+use Prism\Prism\Streaming\Events\ErrorEvent;
+use Prism\Prism\Streaming\Events\StepFinishEvent;
 use Prism\Prism\Streaming\Events\StreamEndEvent;
 use Prism\Prism\Streaming\Events\StreamEvent;
+use Prism\Prism\Streaming\Events\StreamStartEvent;
 use Prism\Prism\Streaming\Events\TextDeltaEvent;
 use Prism\Prism\Streaming\Events\ThinkingCompleteEvent;
 use Prism\Prism\Streaming\Events\ThinkingEvent;
@@ -31,7 +34,20 @@ use Prism\Prism\ValueObjects\MessagePartWithCitations;
 use Prism\Prism\ValueObjects\Messages\AssistantMessage;
 use Prism\Prism\ValueObjects\Messages\SystemMessage;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
+use Tests\Fixtures\EventStreamEncoder;
 use Tests\Fixtures\FixtureResponse;
+
+/**
+ * @param  array<int, StreamEvent>  $events
+ */
+function streamEndEvent(array $events): StreamEndEvent
+{
+    $streamEnds = array_values(array_filter($events, fn (StreamEvent $event): bool => $event instanceof StreamEndEvent));
+
+    expect($streamEnds)->not->toBeEmpty();
+
+    return end($streamEnds);
+}
 
 it('streams output', function (): void {
     FixtureResponse::fakeStreamResponses('converse-stream', 'converse/stream-basic-text');
@@ -55,7 +71,7 @@ it('streams output', function (): void {
     expect($events)->not->toBeEmpty();
     expect($text)->not->toBeEmpty();
 
-    $finalEvent = end($events);
+    $finalEvent = streamEndEvent($events);
 
     expect($finalEvent->finishReason)->toBe(FinishReason::Stop);
 
@@ -102,7 +118,7 @@ it('can return usage with a basic stream', function (): void {
         }
     }
 
-    expect((array) end($event)->usage)->toBe([
+    expect((array) streamEndEvent($event)->usage)->toBe([
         'promptTokens' => 67,
         'completionTokens' => 48,
         'cacheWriteInputTokens' => 131,
@@ -162,7 +178,7 @@ it('can handle tool calls', function (): void {
     expect($events)->not->toBeEmpty();
     expect($toolCallFound)->toBeTrue('Expected to find at least one tool call in the stream');
 
-    $lastEvent = end($events);
+    $lastEvent = streamEndEvent($events);
     expect($lastEvent)->toBeInstanceOf(StreamEndEvent::class);
     expect($lastEvent->finishReason)->toBe(FinishReason::Stop);
 
@@ -319,7 +335,7 @@ describe('citations', function (): void {
             }
         }
 
-        $lastEvent = end($events);
+        $lastEvent = streamEndEvent($events);
 
         // Check that citation events were emitted
         expect($citationEvents)->not->toBeEmpty();
@@ -395,7 +411,7 @@ describe('citations', function (): void {
             }
         }
 
-        $lastEvent = end($events);
+        $lastEvent = streamEndEvent($events);
 
         // Check that citation events were emitted
         expect($citationEvents)->not->toBeEmpty();
@@ -429,5 +445,168 @@ it('throws with the full event when a frame has no event type', function (): voi
             ->withProviderOptions(['apiSchema' => BedrockSchema::Converse])
             ->withPrompt('Who are you?')
             ->asStream()
-    ))->toThrow(PrismException::class, 'something unexpected');
+    ))->toThrow(PrismBedrockException::class);
+});
+
+function fakeConverseStreamSequence(string ...$bodies): void
+{
+    $responses = Http::sequence();
+
+    foreach ($bodies as $body) {
+        $responses->push($body, 200, ['Content-Type' => 'application/vnd.amazon.eventstream']);
+    }
+
+    Http::fake(['converse-stream' => $responses])->preventStrayRequests();
+}
+
+function streamConverseEvents(): array
+{
+    return iterator_to_array(
+        Prism::text()
+            ->using('bedrock', 'us.amazon.nova-micro-v1:0')
+            ->withProviderOptions(['apiSchema' => BedrockSchema::Converse])
+            ->withPrompt('Who are you?')
+            ->asStream(),
+        false
+    );
+}
+
+function successfulConverseStream(): string
+{
+    return EventStreamEncoder::encode([
+        ['messageStart', ['role' => 'assistant']],
+        ['contentBlockStart', ['contentBlockIndex' => 0, 'start' => []]],
+        ['contentBlockDelta', ['contentBlockIndex' => 0, 'delta' => ['text' => 'Hello']]],
+        ['contentBlockStop', ['contentBlockIndex' => 0]],
+        ['messageStop', ['stopReason' => 'end_turn']],
+        ['metadata', [
+            'usage' => ['inputTokens' => 1, 'outputTokens' => 1, 'totalTokens' => 2],
+            'metrics' => ['latencyMs' => 10],
+        ]],
+    ]);
+}
+
+it('retries the request when a retryable exception is streamed', function (): void {
+    fakeConverseStreamSequence(
+        EventStreamEncoder::exception('throttlingException', ['message' => 'Slow down', 'retryable' => true]),
+        successfulConverseStream(),
+    );
+
+    $events = streamConverseEvents();
+
+    Http::assertSentCount(2);
+    expect(streamEndEvent($events))->toBeInstanceOf(StreamEndEvent::class);
+});
+
+it('yields a recoverable error event before retrying', function (): void {
+    fakeConverseStreamSequence(
+        EventStreamEncoder::exception('throttlingException', ['message' => 'Slow down', 'retryable' => true]),
+        successfulConverseStream(),
+    );
+
+    $events = streamConverseEvents();
+
+    expect($events[0])->toBeInstanceOf(ErrorEvent::class)
+        ->and($events[0]->recoverable)->toBeTrue()
+        ->and($events[0]->message)->toContain('Slow down')
+        ->and($events[1])->toBeInstanceOf(StreamStartEvent::class);
+});
+
+it('throws a non-retryable exception after exhausting retries', function (): void {
+    $exception = EventStreamEncoder::exception('throttlingException', ['message' => 'Slow down', 'retryable' => true]);
+
+    fakeConverseStreamSequence($exception, $exception, $exception);
+
+    try {
+        streamConverseEvents();
+        $this->fail('Expected PrismBedrockException to be thrown');
+    } catch (PrismBedrockException $e) {
+        expect($e->getMessage())->toContain('Slow down');
+        expect($e->isRetryable)->toBeFalse();
+    }
+
+    Http::assertSentCount(3);
+});
+
+it('does not retry when a streamed exception is not retryable', function (): void {
+    fakeConverseStreamSequence(
+        EventStreamEncoder::exception('validationException', ['message' => 'Bad request']),
+        successfulConverseStream(),
+    );
+
+    expect(fn () => streamConverseEvents())->toThrow(PrismBedrockException::class, 'Bad request');
+
+    Http::assertSentCount(1);
+});
+
+it('retries when a retryable exception is streamed after partial output', function (): void {
+    $partialStream = EventStreamEncoder::encode([
+        ['messageStart', ['role' => 'assistant']],
+        ['contentBlockStart', ['contentBlockIndex' => 0, 'start' => []]],
+        ['contentBlockDelta', ['contentBlockIndex' => 0, 'delta' => ['text' => 'Hel']]],
+    ]).EventStreamEncoder::exception('modelStreamErrorException', ['message' => 'Stream broke', 'retryable' => true]);
+
+    fakeConverseStreamSequence($partialStream, successfulConverseStream());
+
+    $events = streamConverseEvents();
+
+    Http::assertSentCount(2);
+
+    $types = array_map(fn (StreamEvent $event): string => $event::class, $events);
+    $errorIndex = array_search(ErrorEvent::class, $types, true);
+
+    expect($errorIndex)->toBe(3)
+        ->and($types[$errorIndex + 1])->toBe(StreamStartEvent::class)
+        ->and(streamEndEvent($events))->toBeInstanceOf(StreamEndEvent::class);
+});
+
+it('emits a step finish event for each completed step so consumers can checkpoint', function (): void {
+    fakeConverseStreamSequence(successfulConverseStream());
+
+    $events = streamConverseEvents();
+
+    expect(array_filter($events, fn (StreamEvent $event): bool => $event instanceof StepFinishEvent))->toHaveCount(1);
+});
+
+it('emits a step finish event before the retry request after a tool call', function (): void {
+    $toolStream = EventStreamEncoder::encode([
+        ['messageStart', ['role' => 'assistant']],
+        ['contentBlockStart', [
+            'contentBlockIndex' => 0,
+            'start' => ['toolUse' => ['toolUseId' => 'tooluse_test', 'name' => 'lookup']],
+        ]],
+        ['contentBlockDelta', ['contentBlockIndex' => 0, 'delta' => ['toolUse' => ['input' => '{"q":"x"}']]]],
+        ['contentBlockStop', ['contentBlockIndex' => 0]],
+        ['messageStop', ['stopReason' => 'tool_use']],
+        ['metadata', [
+            'usage' => ['inputTokens' => 1, 'outputTokens' => 1, 'totalTokens' => 2],
+            'metrics' => ['latencyMs' => 10],
+        ]],
+    ]);
+
+    fakeConverseStreamSequence(
+        $toolStream,
+        EventStreamEncoder::exception('throttlingException', ['message' => 'Slow down', 'retryable' => true]),
+        successfulConverseStream(),
+    );
+
+    $events = iterator_to_array(
+        Prism::text()
+            ->using('bedrock', 'us.amazon.nova-micro-v1:0')
+            ->withProviderOptions(['apiSchema' => BedrockSchema::Converse])
+            ->withTools([
+                Tool::as('lookup')->for('Look something up')->withStringParameter('q', 'query')->using(fn (string $q): string => 'ok'),
+            ])
+            ->withMaxSteps(3)
+            ->withPrompt('Look it up')
+            ->asStream(),
+        false
+    );
+
+    $types = array_map(fn (StreamEvent $event): string => $event::class, $events);
+    $stepFinish = array_search(StepFinishEvent::class, $types, true);
+    $error = array_search(ErrorEvent::class, $types, true);
+
+    expect($stepFinish)->not->toBeFalse()
+        ->and($error)->toBeGreaterThan($stepFinish);
 });
