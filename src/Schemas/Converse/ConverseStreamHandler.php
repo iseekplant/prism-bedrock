@@ -67,20 +67,22 @@ class ConverseStreamHandler
     public function streamRequest(Request $request, int $depth = 0, int $attempts = 0): Generator
     {
         try {
+            $attempts++;
             $response = $this->sendRequest($request);
             yield from $this->processStream($response, $request, $depth);
         } catch (PrismBedrockException $e) {
-            $attempts++;
-            if ($e->isRetryable && $attempts < 3) {
-                yield new ErrorEvent(
-                    id: EventID::generate(),
-                    timestamp: time(),
-                    errorType: 'retryable_stream_exception',
-                    message: $e->getMessage(),
-                    recoverable: true,
-                    metadata: ['attempt' => $attempts],
-                );
+            $retryable = $e->isRetryable && $attempts < 3;
 
+            yield new ErrorEvent(
+                id: EventID::generate(),
+                timestamp: time(),
+                errorType: 'retryable_stream_exception',
+                message: $e->getMessage(),
+                recoverable: $retryable,
+                metadata: ['attempt' => $attempts],
+            );
+
+            if ($retryable) {
                 yield from $this->streamRequest($request, $depth, $attempts);
             } else {
                 throw $e->retryable(false);
