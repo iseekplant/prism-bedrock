@@ -13,6 +13,7 @@ use Prism\Bedrock\Schemas\Converse\Maps\CitationsMapper;
 use Prism\Bedrock\Schemas\Converse\Maps\FinishReasonMap;
 use Prism\Bedrock\ValueObjects\ConverseStreamState;
 use Prism\Prism\Concerns\CallsTools;
+use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Exceptions\PrismRateLimitedException;
 use Prism\Prism\Streaming\EventID;
@@ -48,6 +49,18 @@ class ConverseStreamHandler
 
     protected ConverseStreamState $state;
 
+    /**
+     * Raw (unparseable) inputs of tool calls in the current step, keyed by tool call id.
+     *
+     * @var array<string, string>
+     */
+    protected array $invalidToolCalls = [];
+
+    /**
+     * Number of consecutive steps in which every tool call was invalid or unknown.
+     */
+    protected int $sequentialToolErrors = 0;
+
     public function __construct(protected PendingRequest $client)
     {
         $this->state = new ConverseStreamState();
@@ -58,6 +71,8 @@ class ConverseStreamHandler
      */
     public function handle(Request $request): Generator
     {
+        $this->sequentialToolErrors = 0;
+
         yield from $this->streamRequest($request);
     }
 
@@ -117,6 +132,7 @@ class ConverseStreamHandler
     protected function processStream(Response $response, Request $request, int $depth = 0): Generator
     {
         $this->state->reset();
+        $this->invalidToolCalls = [];
 
         $this->state
             ->withModel($request->model());
@@ -159,9 +175,63 @@ class ConverseStreamHandler
     protected function handleToolCalls(Request $request, array $toolCalls, int $depth): Generator
     {
         $toolResults = [];
+        $erroredToolCalls = 0;
 
         foreach ($toolCalls as $toolCall) {
-            $tool = $this->resolveTool($toolCall->name, $request->tools());
+            if (array_key_exists($toolCall->id, $this->invalidToolCalls)) {
+                $toolResult = new ToolResult(
+                    toolCallId: $toolCall->id,
+                    toolName: $toolCall->name,
+                    args: [],
+                    result: $this->invalidToolCallMessage($toolCall),
+                );
+
+                $toolResults[] = $toolResult;
+
+                yield new ToolResultEvent(
+                    id: EventID::generate(),
+                    timestamp: time(),
+                    toolResult: $toolResult,
+                    messageId: $this->state->messageId(),
+                    success: false,
+                    error: $toolResult->result,
+                );
+
+                $erroredToolCalls++;
+
+                continue;
+            }
+
+            try {
+                $tool = $this->resolveTool($toolCall->name, $request->tools());
+            } catch (PrismException $e) {
+                $message = sprintf(
+                    'Error: the tool "%s" does not exist. Only call tools that are listed as available, using their exact names.',
+                    $toolCall->name,
+                );
+
+                $toolResult = new ToolResult(
+                    toolCallId: $toolCall->id,
+                    toolName: $toolCall->name,
+                    args: $toolCall->arguments(),
+                    result: $message,
+                );
+
+                $toolResults[] = $toolResult;
+
+                yield new ToolResultEvent(
+                    id: EventID::generate(),
+                    timestamp: time(),
+                    toolResult: $toolResult,
+                    messageId: $this->state->messageId(),
+                    success: false,
+                    error: $message,
+                );
+
+                $erroredToolCalls++;
+
+                continue;
+            }
 
             try {
                 $success = true;
@@ -235,12 +305,39 @@ class ConverseStreamHandler
 
             $request->addMessage(new ToolResultMessage($toolResults));
 
+            $this->sequentialToolErrors = $erroredToolCalls === count($toolCalls)
+                ? $this->sequentialToolErrors + 1
+                : 0;
+
+            $maxSequentialToolErrors = $this->maxSequentialToolErrors($request);
+
+            if ($this->sequentialToolErrors >= $maxSequentialToolErrors) {
+                yield new ErrorEvent(
+                    id: EventID::generate(),
+                    timestamp: time(),
+                    errorType: 'too_many_tool_errors',
+                    message: sprintf(
+                        'Stopped after %d sequential steps where every tool call was invalid or referenced an unknown tool.',
+                        $this->sequentialToolErrors,
+                    ),
+                    recoverable: false,
+                    metadata: ['sequential_tool_errors' => $this->sequentialToolErrors],
+                );
+
+                return;
+            }
+
             // Continue streaming if within step limit
             $depth++;
             if ($depth < $request->maxSteps()) {
                 yield from $this->streamRequest($request, $depth);
             }
         }
+    }
+
+    protected function maxSequentialToolErrors(Request $request): int
+    {
+        return max(1, (int) ($request->providerOptions('maxSequentialToolErrors') ?? 3));
     }
 
     protected function shouldContinue(Request $request, int $depth): bool
@@ -254,21 +351,7 @@ class ConverseStreamHandler
     protected function mapToolCalls(): array
     {
         return array_values(array_map(function (array $toolCall): ToolCall {
-            $input = data_get($toolCall, 'input');
-
-            // Parse the JSON input
-            if (is_string($input) && json_validate($input)) {
-                $input = json_decode($input, true);
-            } elseif (is_string($input) && $input !== '') {
-                // If it's not valid JSON but not empty, wrap in array
-                $input = ['input' => $input];
-            } else {
-                $input = [];
-            }
-
-            if (is_string($input) && $this->isValidJson($input)) {
-                $input = json_decode($input, true);
-            }
+            $input = $this->parseToolInput(data_get($toolCall, 'id'), data_get($toolCall, 'input'));
 
             return new ToolCall(
                 id: data_get($toolCall, 'id'),
@@ -276,6 +359,43 @@ class ConverseStreamHandler
                 arguments: $input
             );
         }, $this->state->toolCalls()));
+    }
+
+    /**
+     * Decode streamed tool input. Input that cannot be decoded into an object (typically
+     * because the model hit its token limit mid tool call) is recorded as invalid so the
+     * tool is not executed and the model is told what went wrong.
+     *
+     * @return array<string, mixed>
+     */
+    protected function parseToolInput(string $id, mixed $input): array
+    {
+        if (! is_string($input) || trim($input) === '') {
+            return is_array($input) ? $input : [];
+        }
+
+        $decoded = json_validate($input) ? json_decode($input, true) : null;
+
+        if (! is_array($decoded)) {
+            $this->invalidToolCalls[$id] = $input;
+
+            return [];
+        }
+
+        return $decoded;
+    }
+
+    protected function invalidToolCallMessage(ToolCall $toolCall): string
+    {
+        $truncated = $this->state->finishReason() === FinishReason::Length;
+
+        return sprintf(
+            'Error: the arguments for the "%s" tool call could not be parsed as valid JSON%s. '
+            .'The tool was NOT executed. Your input was not empty; it was malformed or cut off. '
+            .'Retry the call with valid, more concise arguments.',
+            $toolCall->name,
+            $truncated ? ' because your response hit the maximum output token limit' : '',
+        );
     }
 
     protected function isValidJson(string $string): bool
@@ -600,15 +720,7 @@ class ConverseStreamHandler
         $toolCall = $this->state->toolCalls()[$blockIndex];
         $input = $toolCall['input'];
 
-        // Parse the JSON input
-        if (is_string($input) && json_validate($input)) {
-            $input = json_decode($input, true);
-        } elseif (is_string($input) && $input !== '') {
-            // If it's not valid JSON but not empty, wrap in array
-            $input = ['input' => $input];
-        } else {
-            $input = [];
-        }
+        $input = $this->parseToolInput($toolCall['id'], $input);
 
         $toolCallObj = new ToolCall(
             id: $toolCall['id'],
