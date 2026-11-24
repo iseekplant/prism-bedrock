@@ -6,6 +6,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Prism\Bedrock\Contracts\BedrockStructuredHandler;
+use Prism\Bedrock\Schemas\Converse\Concerns\ExtractsText;
 use Prism\Bedrock\Schemas\Converse\Concerns\ExtractsToolCalls;
 use Prism\Bedrock\Schemas\Converse\Maps\FinishReasonMap;
 use Prism\Bedrock\Schemas\Converse\Maps\MessageMap;
@@ -24,6 +25,7 @@ use Throwable;
 
 class ConverseStructuredHandler extends BedrockStructuredHandler
 {
+    use ExtractsText;
     use ExtractsToolCalls;
 
     public const STRUCTURED_OUTPUT_TOOL_NAME = 'output_structured_data';
@@ -54,7 +56,7 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
 
         $this->sendRequest($request);
 
-        $this->prepareTempResponse();
+        $this->prepareTempResponse($request);
 
         if ($request->providerOptions('use_structured_output_tool')) {
             $this->tempResponse = $this->applyStructuredOutputTool($this->tempResponse);
@@ -174,13 +176,15 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
         }
     }
 
-    protected function prepareTempResponse(): void
+    protected function prepareTempResponse(Request $request): void
     {
         $data = $this->httpResponse->json();
 
         $this->tempResponse = new StructuredResponse(
             steps: new Collection,
-            text: data_get($data, 'output.message.content.0.text', ''),
+            text: $request->providerOptions('use_structured_output_tool')
+                ? $this->extractText($data)
+                : $this->requireText($data),
             structured: [],
             finishReason: FinishReasonMap::map(data_get($data, 'stopReason')),
             usage: new Usage(
@@ -189,6 +193,23 @@ class ConverseStructuredHandler extends BedrockStructuredHandler
             ),
             meta: new Meta(id: '', model: '') // Not provided in Converse response.
         );
+    }
+
+    /**
+     * @param  array<string,mixed>  $data
+     */
+    protected function requireText(array $data): string
+    {
+        return $this->extractText($data) ?: throw new PrismException(sprintf(
+            'Converse: structured response contained no text. stopReason: %s; content block types: [%s]; usage: inputTokens=%s, outputTokens=%s',
+            data_get($data, 'stopReason', 'unknown'),
+            implode(', ', array_map(
+                fn (mixed $block): string => is_array($block) ? (string) (array_key_first($block) ?? 'empty') : gettype($block),
+                (array) data_get($data, 'output.message.content', []),
+            )),
+            data_get($data, 'usage.inputTokens', 'unknown'),
+            data_get($data, 'usage.outputTokens', 'unknown'),
+        ));
     }
 
     protected function appendMessageForJsonMode(Request $request): void

@@ -350,3 +350,71 @@ it('throws when both validated_schema and use_structured_output_tool are enabled
         ->withPrompt('What time is the tigers game today and should I wear a coat?')
         ->asStructured();
 })->throws(PrismException::class);
+
+function structuredNoTextRequest(array $body): void
+{
+    Http::fake(['*' => Http::response($body)]);
+
+    Prism::structured()
+        ->withSchema(new ObjectSchema('output', 'the output object', [new StringSchema('weather', 'The weather forecast')], ['weather']))
+        ->using('bedrock', 'us.anthropic.claude-sonnet-4-5-20250929-v1:0')
+        ->withProviderOptions(['apiSchema' => BedrockSchema::Converse, 'validated_schema' => true])
+        ->withPrompt('Weather?')
+        ->asStructured();
+}
+
+it('skips a reasoningContent block that precedes the text block', function (): void {
+    Http::fake(['*' => Http::response([
+        'output' => ['message' => ['role' => 'assistant', 'content' => [
+            ['reasoningContent' => ['reasoningText' => ['text' => 'thinking...']]],
+            ['text' => '{"weather":"sunny"}'],
+        ]]],
+        'stopReason' => 'end_turn',
+        'usage' => ['inputTokens' => 10, 'outputTokens' => 5],
+    ])]);
+
+    $response = Prism::structured()
+        ->withSchema(new ObjectSchema('output', 'the output object', [new StringSchema('weather', 'The weather forecast')], ['weather']))
+        ->using('bedrock', 'us.anthropic.claude-sonnet-4-5-20250929-v1:0')
+        ->withProviderOptions(['apiSchema' => BedrockSchema::Converse, 'validated_schema' => true])
+        ->withPrompt('Weather?')
+        ->asStructured();
+
+    expect($response->structured)->toBe(['weather' => 'sunny']);
+});
+
+it('throws a diagnosable exception when the content array is empty', function (): void {
+    structuredNoTextRequest([
+        'output' => ['message' => ['role' => 'assistant', 'content' => []]],
+        'stopReason' => 'guardrail_intervened',
+        'usage' => ['inputTokens' => 12, 'outputTokens' => 0],
+    ]);
+})->throws(PrismException::class, 'stopReason: guardrail_intervened; content block types: []; usage: inputTokens=12, outputTokens=0');
+
+it('includes stopReason and block types when no text block exists', function (): void {
+    structuredNoTextRequest([
+        'output' => ['message' => ['role' => 'assistant', 'content' => [
+            ['reasoningContent' => ['reasoningText' => ['text' => 'secret slack content']]],
+        ]]],
+        'stopReason' => 'max_tokens',
+        'usage' => ['inputTokens' => 100, 'outputTokens' => 2048],
+    ]);
+})->throws(PrismException::class, 'stopReason: max_tokens; content block types: [reasoningContent]; usage: inputTokens=100, outputTokens=2048');
+
+it('does not leak message content in the no-text exception', function (): void {
+    try {
+        structuredNoTextRequest([
+            'output' => ['message' => ['role' => 'assistant', 'content' => [
+                ['reasoningContent' => ['reasoningText' => ['text' => 'secret slack content']]],
+            ]]],
+            'stopReason' => 'end_turn',
+            'usage' => ['inputTokens' => 1, 'outputTokens' => 1],
+        ]);
+    } catch (PrismException $e) {
+        expect($e->getMessage())->not->toContain('secret slack content');
+
+        return;
+    }
+
+    $this->fail('Expected PrismException');
+});
